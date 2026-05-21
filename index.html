@@ -1,0 +1,1324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Ñ</title>
+
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser-arcade-physics.min.js"></script>
+
+<style>
+html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #2c1b16;
+}
+
+canvas {
+    display: block;
+    image-rendering: pixelated;
+}
+</style>
+</head>
+
+<body>
+
+<script>
+    let loadingText;
+let loadingBar;
+
+
+const config = {
+    type: Phaser.AUTO,
+    width: window.innerWidth,
+    height: window.innerHeight,
+    pixelArt: true,
+
+    scale: {
+        mode: Phaser.Scale.RESIZE,
+        autoCenter: Phaser.Scale.CENTER_BOTH
+    },
+
+    physics: {
+        default: 'arcade',
+        arcade: {
+            debug: false
+        }
+    },
+
+    scene: {
+        preload,
+        create,
+        update
+    }
+};
+
+const game = new Phaser.Game(config);
+let bgMusic;
+let playerNameText;
+let manNameText;
+let player, man;
+let wasd, interactKey, spacebar;
+
+let bed, stove, table, cat, catVfx, sax, cake;
+let dialogueBox, dialogueText;
+
+let currentStoryStep = 'WAKE_UP';
+
+let floorBackground;
+
+// ── PIANO TILES RHYTHM STATE ───────────────────────────────────
+// 2 columns only (easier): A = left, L = right
+const COLUMNS    = 2;
+const COL_KEYS   = ['A', 'L'];
+const COL_COLORS = [0x4fc3f7, 0xf06292];
+
+// Tile travel time (ms) — how long a tile takes to fall from top to hit line
+const TRAVEL_MS  = 2000;
+
+// 25 notes synced to Happy Birthday
+// col 0 = left lane (A key), col 1 = right lane (L key)
+// gap = ms until the NEXT note spawns after this one
+const SONG = [
+    // HAPPY birthday to you
+    { col: 0, gap: 800 },
+    { col: 0, gap: 800 },
+    { col: 1, gap: 1450 },
+    { col: 0, gap: 800 },
+    { col: 1, gap: 800 },
+    { col: 0, gap: 2050 },
+
+    // HAPPY birthday to you
+    { col: 0, gap: 800 },
+    { col: 0, gap: 800 },
+    { col: 1, gap: 1450 },
+    { col: 0, gap: 800 },
+    { col: 1, gap: 800 },
+    { col: 1, gap: 2050 },
+
+    // HAPPY birthday dear ___
+    { col: 0, gap: 800 },
+    { col: 0, gap: 800 },
+    { col: 1, gap: 1250 },
+    { col: 1, gap: 1250 },
+    { col: 1, gap: 1250 },
+    { col: 0, gap: 950 },
+    { col: 0, gap: 1550 },
+
+    // HAPPY birthday to you
+    { col: 1, gap: 625 },
+    { col: 1, gap: 625 },
+    { col: 1, gap: 1250 },
+    { col: 1, gap: 900 },
+    { col: 1, gap: 900 },
+    { col: 1, gap: 2000 },
+];
+
+// Verse checkpoint indices in SONG[]
+const VERSE_START = [0, 6, 12, 19];
+
+// Delay before the very first tile spawns (gives player time to get ready)
+const FIRST_TILE_DELAY_MS = 1500;
+
+// Hit window in pixels — larger = easier
+const HIT_WINDOW_PX = 100;
+
+// ── MULTI-TILE STATE (replaces single activeNote) ──────────────
+// spawnIndex   : which SONG note to spawn next
+// spawnTimer   : ms until next tile spawns (counts down each frame)
+// activeTiles  : array of all tiles currently on screen
+// songStarted  : has the spawn loop begun?
+let spawnIndex  = 0;
+let spawnTimer  = 0;
+let activeTiles = [];
+let songStarted = false;
+
+let rhythmUI       = {};
+let colKeyObjects  = {};
+let noteClips      = [];
+
+// ── MISS state (shared across the whole rhythm game) ──────────
+let missTimer    = 0;  // > 0 means we are in post-miss pause
+let missActive   = false;
+
+// ───────────────────────────────────────────────────────────────
+
+function preload() {
+const width = this.cameras.main.width;
+const height = this.cameras.main.height;
+
+// Background
+this.add.rectangle(width / 2, height / 2, width, height, 0x1b1210);
+
+// Title
+this.add.text(width / 2, height / 2 - 80,
+    'Preparing Something Special...',
+{
+    fontSize: '32px',
+    fontFamily: 'monospace',
+    color: '#fff3e0'
+}).setOrigin(0.5);
+
+// Loading box
+this.add.rectangle(width / 2, height / 2, 420, 40, 0x3a241c);
+
+// Loading bar
+loadingBar = this.add.rectangle(
+    width / 2 - 200,
+    height / 2,
+    0,
+    28,
+    0xd9a066
+).setOrigin(0, 0.5);
+
+// Loading text
+loadingText = this.add.text(
+    width / 2,
+    height / 2 + 60,
+    'Loading... 0%',
+{
+    fontSize: '18px',
+    fontFamily: 'monospace',
+    color: '#ffffff'
+}).setOrigin(0.5);
+
+// Update progress
+this.load.on('progress', (value) => {
+
+    loadingBar.width = 400 * value;
+
+    loadingText.setText(
+        'Loading... ' + Math.floor(value * 100) + '%'
+    );
+});
+
+// Cleanup
+this.load.on('complete', () => {
+
+    loadingBar.destroy();
+    loadingText.destroy();
+});
+    this.load.spritesheet('woman', 'assets/Amelia_run_16x16.png', {
+        frameWidth: 16,
+        frameHeight: 32
+    });
+
+    this.load.spritesheet('man_img', 'assets/Bob_run_16x16.png', {
+        frameWidth: 16,
+        frameHeight: 32
+    });
+
+    this.load.spritesheet('cat_meow', 'assets/Cat-1-Meow.png?v=4', {
+        frameWidth: 38,
+        frameHeight: 32
+    });
+
+    this.load.spritesheet('meow_vfx', 'assets/Meow-VFX.png?v=4', {
+        frameWidth: 80,
+        frameHeight: 80
+    });
+
+    this.load.image('bed_img',   'assets/bed.png');
+    this.load.image('stove_img', 'assets/stove.png');
+    this.load.image('table_img', 'assets/table2.png');
+    this.load.image('sax_img',   'assets/sax3.png');
+    this.load.audio('bg_music', 'assets/cozy_music.mp3');
+
+    this.load.on('loaderror', function(file) {
+        console.warn('Audio load error (non-fatal):', file.key);
+    });
+
+    for (let n = 1; n <= 25; n++) {
+        this.load.audio('note_' + n, 'assets/notes/note_' + n + '.mp3');
+    }
+   // this.load.audio('bg_music', 'assets/cozy_music.mp3');
+}
+
+function create() {
+
+    createFloorTexture.call(this);
+    createCakeTexture.call(this);
+    createAnimations.call(this);
+
+    wasd = this.input.keyboard.addKeys({
+        up:    Phaser.Input.Keyboard.KeyCodes.W,
+        down:  Phaser.Input.Keyboard.KeyCodes.S,
+        left:  Phaser.Input.Keyboard.KeyCodes.A,
+        right: Phaser.Input.Keyboard.KeyCodes.D
+    });
+
+    interactKey = this.input.keyboard.addKey(
+        Phaser.Input.Keyboard.KeyCodes.F
+    );
+
+    spacebar = this.input.keyboard.addKey(
+        Phaser.Input.Keyboard.KeyCodes.SPACE
+    );
+
+    // 2 column keys: A (left lane) and L (right lane)
+    colKeyObjects[0] = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.A);
+    colKeyObjects[1] = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.L);
+
+    for (let n = 1; n <= 25; n++) {
+        try {
+            if (this.cache.audio.exists('note_' + n)) {
+                noteClips[n - 1] = this.sound.add('note_' + n, { volume: 1 });
+            } else {
+                noteClips[n - 1] = null;
+            }
+        } catch(e) {
+            noteClips[n - 1] = null;
+        }
+    }
+
+    updateInteriorLayout.call(this);
+   // Create music once
+bgMusic = this.sound.add('bg_music', {
+    volume: 0.35,
+    loop: true
+});
+
+// Start after first user interaction
+bgMusic = this.sound.add('bg_music', {
+    volume: 0.35,
+    loop: true
+});
+
+const startMusic = async () => {
+
+    if (this.sound.context.state === 'suspended') {
+        await this.sound.context.resume();
+    }
+
+    if (!bgMusic.isPlaying) {
+        bgMusic.play();
+    }
+
+    this.input.off('pointerdown', startMusic);
+    this.input.keyboard.off('keydown', startMusic);
+};
+
+this.input.on('pointerdown', startMusic);
+this.input.keyboard.on('keydown', startMusic);
+
+
+
+// Start music after first user interaction
+
+
+    this.scale.on('resize', function(gameSize){
+        updateInteriorLayout.call(this, gameSize.width, gameSize.height);
+    }, this);
+}
+
+function createFloorTexture() {
+
+    const floorTile = this.make.graphics({ x: 0, y: 0, add: false });
+
+    floorTile.fillStyle(0xd9a15d, 1);
+    floorTile.fillRect(0, 0, 128, 64);
+    floorTile.lineStyle(2, 0xb97a3d, 1);
+
+    for(let y = 0; y < 64; y += 16){ floorTile.lineBetween(0, y, 128, y); }
+    for(let x = 0; x < 128; x += 32){ floorTile.lineBetween(x, 0, x, 8); }
+
+    floorTile.generateTexture('wood_floor_tile', 128, 64);
+}
+
+function createCakeTexture() {
+
+    const cakeG = this.make.graphics({ x: 0, y: 0, add: false });
+
+    // Plate
+    cakeG.fillStyle(0xd7d7d7, 1);
+    cakeG.fillRoundedRect(0, 40, 80, 10, 4);
+
+    // Bottom cake layer
+    cakeG.fillStyle(0xb07a52, 1);
+    cakeG.fillRoundedRect(10, 24, 60, 18, 4);
+
+    // Cream
+    cakeG.fillStyle(0xfff4dc, 1);
+    cakeG.fillRoundedRect(8, 18, 64, 10, 4);
+
+    // Top layer
+    cakeG.fillStyle(0xd99a6c, 1);
+    cakeG.fillRoundedRect(18, 8, 44, 14, 4);
+
+    // Frosting
+    cakeG.fillStyle(0xffffff, 1);
+    cakeG.fillRoundedRect(16, 4, 48, 8, 4);
+
+    // Strawberry decorations
+    cakeG.fillStyle(0xff4f6d, 1);
+    cakeG.fillCircle(25, 12, 3);
+    cakeG.fillCircle(40, 10, 3);
+    cakeG.fillCircle(55, 12, 3);
+
+    // Candle
+    cakeG.fillStyle(0xff66aa, 1);
+    cakeG.fillRect(38, -8, 4, 14);
+
+    // Flame
+    cakeG.fillStyle(0xffc107, 1);
+    cakeG.fillCircle(40, -12, 4);
+
+    cakeG.fillStyle(0xffec80, 1);
+    cakeG.fillCircle(40, -13, 2);
+
+    cakeG.generateTexture('cake_vector', 80, 60);
+}
+function createAnimations() {
+
+    this.anims.create({
+        key: 'walk',
+        frames: this.anims.generateFrameNumbers('woman', { start: 0, end: 3 }),
+        frameRate: 8,
+        repeat: -1
+    });
+
+    this.anims.create({
+        key: 'idle',
+        frames: [{ key: 'woman', frame: 0 }],
+        frameRate: 1
+    });
+
+    this.anims.create({
+        key: 'man_walk',
+        frames: this.anims.generateFrameNumbers('man_img', { start: 0, end: 3 }),
+        frameRate: 8,
+        repeat: -1
+    });
+
+    this.anims.create({
+        key: 'man_idle',
+        frames: [{ key: 'man_img', frame: 0 }],
+        frameRate: 1
+    });
+
+    this.anims.create({
+        key: 'cat_talking',
+        frames: this.anims.generateFrameNumbers('cat_meow', { start: 0, end: 3 }),
+        frameRate: 6,
+        repeat: -1
+    });
+
+    this.anims.create({
+        key: 'cat_sitting',
+        frames: [{ key: 'cat_meow', frame: 0 }],
+        frameRate: 1
+    });
+
+    const texture = this.textures.get('meow_vfx');
+
+    if (texture && texture.frameTotal > 1) {
+        this.anims.create({
+            key: 'vfx_wave',
+            frames: this.anims.generateFrameNumbers('meow_vfx', {
+                start: 0,
+                end: texture.frameTotal - 1
+            }),
+            frameRate: 8,
+            repeat: -1
+        });
+    }
+}
+
+function updateInteriorLayout(customW, customH) {
+
+    const w = customW || this.cameras.main.width;
+    const h = customH || this.cameras.main.height;
+
+    this.cameras.resize(w, h);
+
+    if (floorBackground) floorBackground.destroy();
+
+    floorBackground = this.add.tileSprite(w / 2, h / 2, w, h, 'wood_floor_tile');
+    floorBackground.setDepth(0);
+
+    const warmGlow = this.add.rectangle(w / 2, h / 2, w, h, 0xffd9a3, 0.08);
+    warmGlow.setBlendMode(Phaser.BlendModes.MULTIPLY);
+    warmGlow.setDepth(0.1);
+
+    // DOOR
+    this.add.rectangle(12, h * 0.50, 24, 120, 0x5c3b22).setDepth(2);
+    this.add.rectangle(18, h * 0.50,  6,   6, 0xd7b46a).setDepth(3);
+
+    // SUNLIGHT
+    const sunlight = this.add.rectangle(w * 0.20, h * 0.22, 280, 320, 0xffefb0, 0.18);
+    sunlight.setAngle(-10);
+    sunlight.setBlendMode(Phaser.BlendModes.ADD);
+    sunlight.setDepth(0.2);
+
+    // WALLS
+    this.add.rectangle(w / 2,      40, w,  80, 0xf5e4c6).setDepth(1);
+    this.add.rectangle(w / 2,      74, w,  10, 0xa96c3c).setDepth(1);
+    this.add.rectangle(w / 2,       8, w,  16, 0x5c3b22).setDepth(1);
+    this.add.rectangle(      10, h / 2, 20, h, 0x7a4e2d).setDepth(1);
+    this.add.rectangle(w -  10, h / 2, 20, h, 0x7a4e2d).setDepth(1);
+    this.add.rectangle(w / 2,  h - 10, w,  20, 0x7a4e2d).setDepth(1);
+
+    // WINDOW
+    const windowX = w * 0.17;
+    const windowY = h * 0.05;
+    this.add.rectangle(windowX, windowY, 110,  80, 0xd39a52).setDepth(2);
+    this.add.rectangle(windowX, windowY,  90,  60, 0x9fd6ff).setDepth(2);
+    this.add.line(0, 0, windowX - 45, windowY, windowX + 45, windowY, 0xffffff).setDepth(3);
+    this.add.line(0, 0, windowX, windowY - 30, windowX, windowY + 30, 0xffffff).setDepth(3);
+
+    // FIREPLACE
+    const fireplaceX = w * 0.50;
+    const fireplaceY = h * 0.10;
+    this.add.rectangle(fireplaceX, fireplaceY,     130, 120, 0x7c5a43).setDepth(2);
+    this.add.rectangle(fireplaceX, fireplaceY + 8,  90,  70, 0x2f1b14).setDepth(3);
+
+    const fire = this.add.circle(fireplaceX, fireplaceY + 8, 20, 0xff9e2c);
+    fire.setDepth(4);
+    this.tweens.add({ targets: fire, scale: 1.2, duration: 600, yoyo: true, repeat: -1 });
+
+    // RUG
+    const rug = this.add.rectangle(w * 0.50, h * 0.72, 300, 140, 0x9db26c);
+    rug.setStrokeStyle(8, 0x7f905a);
+    rug.setDepth(1);
+
+    // PLANTS
+    createPlant.call(this, w * 0.08, h * 0.82);
+    createPlant.call(this, w * 0.92, h * 0.82);
+
+    // BOOKSHELF
+    this.add.rectangle(w * 0.31, h * 0.10, 70, 120, 0x8b5a2b).setDepth(2);
+    for (let i = 0; i < 6; i++) {
+        this.add.rectangle(
+            (w * 0.31) - 24 + i * 10,
+            h * 0.10,
+            7, 70,
+            Phaser.Display.Color.RandomRGB().color
+        ).setDepth(3);
+    }
+
+    // BED
+    if (!bed) {
+        bed = this.add.sprite(w * 0.16, h * 0.30, 'bed_img');
+        bed.setDisplaySize(180, 130);
+        this.physics.add.existing(bed, true);
+    } else {
+        bed.setPosition(w * 0.16, h * 0.30);
+    }
+    bed.body.setSize(bed.width * 0.72, bed.height * 0.10);
+    bed.body.setOffset(bed.width * 0.14, bed.height * 0.60);
+    bed.body.updateFromGameObject();
+    bed.setDepth(3);
+
+    // STOVE
+    if (!stove) {
+        stove = this.add.sprite(w * 0.64, h * 0.10, 'stove_img').setScale(1.8);
+        this.physics.add.existing(stove, true);
+        stove.body.setSize(stove.width * 0.01, stove.height * 0.01);
+        stove.body.setOffset(stove.width * 0.01, stove.height * 0.01);
+    } else {
+        stove.setPosition(w * 0.64, h * 0.10);
+    }
+    stove.body.updateFromGameObject();
+    stove.setDepth(3);
+
+    // TABLE
+    if (!table) {
+        table = this.add.sprite(w * 0.83, h * 0.30, 'table_img').setScale(0.30);
+        this.physics.add.existing(table, true);
+    } else {
+        table.setPosition(w * 0.83, h * 0.30);
+    }
+    table.body.updateFromGameObject();
+    table.setDepth(3);
+
+    // CAT
+    if (!cat) {
+        cat = this.add.sprite(w * 0.68, h * 0.75, 'cat_meow', 0).setScale(2.2);
+        this.physics.add.existing(cat, true);
+        cat.anims.play('cat_sitting');
+
+        catVfx = this.add.sprite((w * 0.68) + 65, (h * 0.75) - 15, 'meow_vfx', 0).setScale(1.2);
+        catVfx.setVisible(false);
+    } else {
+        cat.setPosition(w * 0.68, h * 0.75);
+        catVfx.setPosition((w * 0.68) + 65, (h * 0.75) - 15);
+    }
+    cat.body.updateFromGameObject();
+    cat.setDepth(4);
+    catVfx.setDepth(5);
+
+    // SAX
+    if (!sax) {
+        sax = this.add.sprite(w * 0.90, h * 0.70, 'sax_img').setDisplaySize(60, 80);
+        this.physics.add.existing(sax, true);
+    } else {
+        sax.setPosition(w * 0.90, h * 0.70);
+    }
+    sax.body.updateFromGameObject();
+    sax.setDepth(4);
+
+    // CAKE
+    if (!cake) {
+        cake = this.add.sprite(w * 0.90, h * 0.18, 'cake_vector').setScale(1.6);
+        cake.setVisible(false);
+    } else {
+        cake.setPosition(w * 0.90, h * 0.18);
+    }
+    cake.setDepth(5);
+
+    // MAN
+    if (!man) {
+        man = this.add.sprite(-80, h * 0.5, 'man_img', 0).setScale(2.8);
+        this.physics.add.existing(man);
+        man.setVisible(false);
+        man.anims.play('man_idle');
+    } else {
+        if (currentStoryStep !== 'MAN_CUTSCENE' && currentStoryStep !== 'END') {
+            man.setPosition(-80, h * 0.5);
+        }
+    }
+    man.setDepth(5);
+    // ── NAME TAGS ─────────────────────────────────────────
+
+
+
+    // PLAYER
+    if (!player) {
+        player = this.add.sprite(w * 0.16, h * 0.34, 'woman').setScale(2.8);
+        this.physics.add.existing(player);
+        player.body.setCollideWorldBounds(true);
+        this.physics.add.collider(player, [bed, stove, table, cat, sax]);
+        player.anims.play('idle');
+    } else {
+        if (player.x > w) player.x = w - 50;
+        if (player.y > h) player.y = h - 100;
+    }
+    player.setDepth(5);
+
+    // DIALOGUE
+    if (!dialogueBox) {
+        dialogueBox = this.add.rectangle(w / 2, h - 80, w * 0.92, 110, 0x1b1210);
+        dialogueBox.setStrokeStyle(4, 0xd9a066);
+
+        dialogueText = this.add.text(w * 0.06, h - 120, '', {
+            fill: '#fff3e0',
+            fontSize: '18px',
+            fontFamily: 'monospace',
+            wordWrap: { width: w * 0.84 }
+        });
+
+        showDialogue("You slowly wake up inside your cozy bedroom. (Press F to dismiss and move)");
+    } else {
+        dialogueBox.setPosition(w / 2, h - 80).setSize(w * 0.92, 110);
+        dialogueText.setPosition(w * 0.06, h - 120).setWordWrapWidth(w * 0.84);
+    }
+    // PLAYER NAME
+if (!playerNameText) {
+
+    playerNameText = this.add.text(
+        player.x,
+        player.y - 70,
+        'Ch4klet',
+        {
+            fontSize: '18px',
+            fontFamily: 'monospace',
+            color: '#ffffff',
+            backgroundColor: '#00000088',
+            padding: { x: 6, y: 2 }
+        }
+    );
+
+    playerNameText.setOrigin(0.5);
+    playerNameText.setDepth(100);
+}
+
+// MAN NAME
+if (!manNameText) {
+
+    manNameText = this.add.text(
+        man.x,
+        man.y - 70,
+        'snflwr',
+        {
+            fontSize: '18px',
+            fontFamily: 'monospace',
+            color: '#ffffff',
+            backgroundColor: '#00000088',
+            padding: { x: 6, y: 2 }
+        }
+    );
+
+    manNameText.setOrigin(0.5);
+    manNameText.setDepth(100);
+}
+
+    dialogueBox.setDepth(20);
+    dialogueText.setDepth(21);
+
+}
+
+function createPlant(x, y) {
+    this.add.circle(x, y, 18, 0x5f9348).setDepth(3);
+    this.add.rectangle(x, y + 22, 26, 20, 0x8b5a2b).setDepth(3);
+}
+
+// ── PIANO TILES UI HELPERS ─────────────────────────────────────
+
+function initRhythmUI(scene, width, height) {
+
+    const colWidth = width * 0.20;
+    const hitY     = height * 0.75;
+    const startX   = width * 0.5 - (COLUMNS / 2 - 0.5) * (colWidth + 12);
+
+    rhythmUI.colWidth = colWidth;
+    rhythmUI.startX   = startX;
+    rhythmUI.hitY     = hitY;
+
+    rhythmUI.overlay = scene.add.rectangle(
+        width / 2, height / 2, width, height, 0x000000, 0.72
+    ).setDepth(9);
+
+    rhythmUI.lanes = [];
+    for (let c = 0; c < COLUMNS; c++) {
+        const lx   = startX + c * (colWidth + 12);
+        const lane = scene.add.rectangle(lx, height / 2, colWidth, height, 0x111111, 0.88);
+        lane.setStrokeStyle(2, 0x333333);
+        lane.setDepth(10);
+        rhythmUI.lanes.push(lane);
+    }
+
+    rhythmUI.hitLines = [];
+    for (let c = 0; c < COLUMNS; c++) {
+        const lx   = startX + c * (colWidth + 12);
+        const line = scene.add.rectangle(lx, hitY, colWidth - 4, 14, COL_COLORS[c]);
+        line.setDepth(11);
+        rhythmUI.hitLines.push(line);
+    }
+
+    rhythmUI.hitWindows = [];
+    for (let c = 0; c < COLUMNS; c++) {
+        const lx  = startX + c * (colWidth + 12);
+        const win = scene.add.rectangle(lx, hitY, colWidth - 4, HIT_WINDOW_PX * 2, COL_COLORS[c], 0.12);
+        win.setDepth(10.5);
+        rhythmUI.hitWindows.push(win);
+    }
+
+    rhythmUI.keyLabels = [];
+    for (let c = 0; c < COLUMNS; c++) {
+        const lx  = startX + c * (colWidth + 12);
+        const lbl = scene.add.text(lx, hitY + 40, COL_KEYS[c], {
+            fontSize: '28px',
+            fontFamily: 'monospace',
+            fill: '#' + COL_COLORS[c].toString(16).padStart(6, '0'),
+            fontStyle: 'bold',
+            align: 'center'
+        }).setOrigin(0.5).setDepth(12);
+        rhythmUI.keyLabels.push(lbl);
+    }
+
+    rhythmUI.titleText = scene.add.text(
+        width / 2, height * 0.06,
+        '♪  Press  [ A ]  or  [ L ]  when the tile hits the glowing line  ♪',
+        { fontSize: '17px', fontFamily: 'monospace', fill: '#cccccc', align: 'center' }
+    ).setOrigin(0.5).setDepth(12);
+
+    rhythmUI.verseText = scene.add.text(
+        width / 2, height * 0.13, '',
+        { fontSize: '16px', fontFamily: 'monospace', fill: '#888888', align: 'center' }
+    ).setOrigin(0.5).setDepth(12);
+
+    rhythmUI.feedbackText = scene.add.text(
+        width / 2, hitY - 80, '',
+        { fontSize: '36px', fontFamily: 'monospace', fill: '#ffffff', fontStyle: 'bold', align: 'center' }
+    ).setOrigin(0.5).setDepth(13);
+}
+
+function refreshRhythmHUD(idx) {
+
+    if (!rhythmUI.verseText) return;
+
+    const verse    = getCurrentVerse(idx);
+    const verseEnd = (verse < VERSE_START.length - 1)
+        ? VERSE_START[verse + 1]
+        : SONG.length;
+
+    const filled = idx - VERSE_START[verse];
+    const total  = verseEnd - VERSE_START[verse];
+
+    const labels = ['Verse 1', 'Verse 2', 'Verse 3', 'Verse 4'];
+    const col    = '#' + COL_COLORS[verse % 2].toString(16).padStart(6, '0');
+
+    rhythmUI.verseText
+        .setText(labels[verse] + '  ' + '●'.repeat(filled) + '○'.repeat(total - filled))
+        .setColor(col);
+}
+
+function flashLane(col, success) {
+
+    if (!rhythmUI.lanes) return;
+
+    const lane  = rhythmUI.lanes[col];
+    const color = success ? COL_COLORS[col] : 0xff4455;
+
+    lane.setFillStyle(color, 0.55);
+
+    setTimeout(function() {
+        if (lane && lane.active) lane.setFillStyle(0x111111, 0.88);
+    }, 200);
+}
+
+function cleanupRhythmUI() {
+
+    // Destroy all active tiles first
+    activeTiles.forEach(function(t) { if (t && t.active) t.destroy(); });
+    activeTiles = [];
+
+    // Reset spawn state
+    spawnIndex  = 0;
+    spawnTimer  = 0;
+    songStarted = false;
+    missActive  = false;
+    missTimer   = 0;
+
+    Object.values(rhythmUI).forEach(function(obj) {
+        if (Array.isArray(obj)) {
+            obj.forEach(function(o) { if (o && o.destroy) o.destroy(); });
+        } else if (obj && obj.destroy) {
+            obj.destroy();
+        }
+    });
+
+    rhythmUI = {};
+}
+
+function getCurrentVerse(idx) {
+    for (let v = VERSE_START.length - 1; v >= 0; v--) {
+        if (idx >= VERSE_START[v]) return v;
+    }
+    return 0;
+}
+
+// Spawn one tile for SONG[idx] into the scene
+function spawnTile(scene, idx, width, height) {
+
+    if (idx >= SONG.length) return;
+
+    const colWidth = rhythmUI.colWidth;
+    const startX   = rhythmUI.startX;
+    const hitY     = rhythmUI.hitY;
+    const NOTE_SPEED = (hitY / TRAVEL_MS) * 1000;
+
+    const col = SONG[idx].col;
+    const lx  = startX + col * (colWidth + 12);
+
+    const tile = scene.add.rectangle(lx, 0, colWidth - 10, 50, COL_COLORS[col]);
+    tile.setStrokeStyle(3, 0xffffff, 0.4);
+    scene.physics.add.existing(tile);
+    tile.body.setVelocityY(NOTE_SPEED);
+    tile._col      = col;
+    tile._noteIdx  = idx;    // which note this tile belongs to
+    tile._hit      = false;
+    tile.setDepth(11);
+
+    activeTiles.push(tile);
+}
+
+// ── MAIN UPDATE ────────────────────────────────────────────────
+
+function update(time, delta) {
+
+    const width  = this.cameras.main.width;
+    const height = this.cameras.main.height;
+
+    player.body.setVelocity(0);
+
+    const canMove =
+        !dialogueBox.visible &&
+        currentStoryStep !== 'RHYTHM_GAME' &&
+        currentStoryStep !== 'MAN_CUTSCENE' &&
+        currentStoryStep !== 'END';
+
+    if (canMove) {
+
+        let moving = false;
+
+        if (wasd.left.isDown) {
+            player.body.setVelocityX(-180);
+            player.anims.play('walk', true);
+            player.flipX = true;
+            moving = true;
+        } else if (wasd.right.isDown) {
+            player.body.setVelocityX(180);
+            player.anims.play('walk', true);
+            player.flipX = false;
+            moving = true;
+        }
+
+        if (wasd.up.isDown) {
+            player.body.setVelocityY(-180);
+            moving = true;
+        } else if (wasd.down.isDown) {
+            player.body.setVelocityY(180);
+            moving = true;
+        }
+
+        if (!moving) player.anims.play('idle', true);
+    }
+
+    // ── Dismiss dialogue with F ──────────────────────────────
+    if (dialogueBox.visible && Phaser.Input.Keyboard.JustDown(interactKey)) {
+
+        hideDialogue();
+
+       if (currentStoryStep === 'WAKE_UP') {
+
+    currentStoryStep = 'FRY_EGG';
+    showDialogue("Objective: Walk to the Stove and press F to cook breakfast.");
+
+} else if (currentStoryStep === 'PLAY_SAX_READY') {
+
+    cat.anims.play('cat_sitting');
+    catVfx.setVisible(false);
+
+    if (catVfx.anims.isPlaying) {
+        catVfx.anims.stop();
+    }
+
+    currentStoryStep = 'PLAY_SAX';
+
+} else if (currentStoryStep === 'RHYTHM_GAME') {
+
+    // Instruction dismissed — start the spawn countdown
+    songStarted = true;
+    spawnTimer = FIRST_TILE_DELAY_MS;
+
+} else if (currentStoryStep === 'RHYTHM_COMPLETE') {
+
+    currentStoryStep = 'MAN_CUTSCENE';
+}
+    }
+
+    // ── Proximity interactions ───────────────────────────────
+
+    let distStove = Phaser.Math.Distance.Between(player.x, player.y, stove.x, stove.y);
+    let distTable = Phaser.Math.Distance.Between(player.x, player.y, table.x, table.y);
+    let distCat   = Phaser.Math.Distance.Between(player.x, player.y, cat.x,   cat.y);
+    let distSax   = Phaser.Math.Distance.Between(player.x, player.y, sax.x,   sax.y);
+
+    if (currentStoryStep === 'FRY_EGG' && distStove < 90 &&
+        Phaser.Input.Keyboard.JustDown(interactKey)) {
+        showDialogue("Sizzle sizzle... perfect breakfast!\nObjective: Eat at the table.");
+        currentStoryStep = 'EAT_EGG';
+    }
+
+    if (currentStoryStep === 'EAT_EGG' && distTable < 90 &&
+        Phaser.Input.Keyboard.JustDown(interactKey)) {
+        showDialogue("That was good.\nObjective: Feed your cat.");
+        currentStoryStep = 'FEED_CAT';
+    }
+
+    if (currentStoryStep === 'FEED_CAT' && distCat < 110 &&
+        Phaser.Input.Keyboard.JustDown(interactKey)) {
+        cat.anims.play('cat_talking', true);
+        catVfx.setVisible(true);
+        catVfx.anims.play('vfx_wave', true);
+        showDialogue(
+            "CAT: 'MEOW! *purrrrrr*'\n" +
+            "Objective: Head over to your Saxophone corner to start morning rehearsal."
+        );
+        currentStoryStep = 'PLAY_SAX_READY';
+    }
+
+    if (currentStoryStep === 'PLAY_SAX' && distSax < 90 &&
+    Phaser.Input.Keyboard.JustDown(interactKey)) {
+
+    // Stop cozy background music when rhythm game starts
+    if (bgMusic && bgMusic.isPlaying) {
+        bgMusic.stop();
+    }
+
+    // Reset all multi-tile state
+    activeTiles.forEach(function(t) {
+        if (t && t.active) t.destroy();
+    });
+
+    activeTiles = [];
+    spawnIndex  = 0;
+    spawnTimer  = 0;
+    songStarted = false;
+    missActive  = false;
+    missTimer   = 0;
+
+    currentStoryStep = 'RHYTHM_GAME';
+
+    showDialogue(
+        "Time to practice!\n" +
+        "Press  [ A ]  for the LEFT lane,  [ L ]  for the RIGHT lane.\n" +
+        "Hit the tile when it reaches the glowing line!"
+    );
+}
+
+    // ════════════════════════════════════════════════════════════
+    // PIANO TILES RHYTHM GAME  —  multi-tile version
+    // ════════════════════════════════════════════════════════════
+
+    if (currentStoryStep === 'RHYTHM_GAME' && !dialogueBox.visible) {
+
+        // Build UI once
+        if (!rhythmUI.hitLines) {
+            initRhythmUI(this, width, height);
+        }
+
+        refreshRhythmHUD(spawnIndex);
+
+        const hitY = rhythmUI.hitY;
+
+        // ── MISS PAUSE: clear board, rewind, restart ─────────
+        if (missActive) {
+
+            missTimer -= delta;
+
+            if (missTimer <= 0) {
+
+                // Destroy all remaining tiles
+                activeTiles.forEach(function(t) { if (t && t.active) t.destroy(); });
+                activeTiles = [];
+
+                // Rewind spawn to start of current verse
+                const verse = getCurrentVerse(spawnIndex);
+                spawnIndex  = VERSE_START[verse];
+                spawnTimer  = FIRST_TILE_DELAY_MS;
+
+                missActive = false;
+
+                if (rhythmUI.hitLines) {
+                    rhythmUI.hitLines.forEach(function(l, c) {
+                        l.setFillStyle(COL_COLORS[c]);
+                    });
+                }
+
+                rhythmUI.feedbackText.setText('');
+            }
+
+            return; // skip everything else during miss pause
+        }
+
+        // ── SPAWN NEXT TILE on schedule ──────────────────────
+        if (songStarted && spawnIndex < SONG.length) {
+
+            spawnTimer -= delta;
+
+            if (spawnTimer <= 0) {
+
+                spawnTile(this, spawnIndex, width, height);
+
+                spawnIndex++;
+
+                if (spawnIndex < SONG.length) {
+                    // Schedule next tile: its gap tells us how far apart these onsets are.
+                    // We subtract TRAVEL_MS so the tile is already on screen early enough,
+                    // but the GAP drives the musical rhythm correctly.
+                    // Using gap directly means tile N+1 spawns gap[N] ms after tile N.
+                    spawnTimer = SONG[spawnIndex - 1].gap;
+                }
+                // If spawnIndex === SONG.length we've queued all tiles; just let them fall.
+            }
+        }
+
+        // ── KEY PRESS: check all tiles in the correct column ─
+        for (let c = 0; c < COLUMNS; c++) {
+
+            if (!Phaser.Input.Keyboard.JustDown(colKeyObjects[c])) continue;
+
+            // Find the tile in column c that is closest to hitY and inside the window
+            let bestTile = null;
+            let bestDist = Infinity;
+
+            activeTiles.forEach(function(t) {
+                if (!t || !t.active || t._hit) return;
+                if (t._col !== c) return;
+                const d = Math.abs(t.y - hitY);
+                if (d < HIT_WINDOW_PX && d < bestDist) {
+                    bestDist = d;
+                    bestTile = t;
+                }
+            });
+
+            if (bestTile) {
+
+                // ── HIT ──────────────────────────────────────
+                const noteIdx = bestTile._noteIdx;
+                bestTile._hit = true;
+                flashLane(c, true);
+                bestTile.destroy();
+                activeTiles = activeTiles.filter(function(t) { return t !== bestTile; });
+
+                // Play sound
+                try {
+                    if (noteClips[noteIdx]) noteClips[noteIdx].play();
+                } catch(e) {}
+
+                rhythmUI.feedbackText.setText('✓  NICE!').setColor('#00ff88');
+                if (rhythmUI.hitLines) rhythmUI.hitLines[c].setFillStyle(0x00ff88);
+
+                // Check if that was the very last tile (spawnIndex reached end AND no tiles left)
+                const allSpawned = (spawnIndex >= SONG.length);
+                const noMore     = activeTiles.length === 0;
+
+                if (allSpawned && noMore) {
+                    cleanupRhythmUI.call(this);
+                    noteClips = [];
+                    currentStoryStep = 'RHYTHM_COMPLETE';
+                    if (bgMusic && !bgMusic.isPlaying) {
+    bgMusic.play();
+}
+
+                    showDialogue(
+                        "Beautiful playing... something feels different today.\nPress F to continue."
+                    );
+                }
+
+            } else {
+
+                // ── WRONG KEY / EARLY PRESS — only penalise if a tile
+                //    in this column is somewhere on screen (not too early) ──
+                const hasTileOnScreen = activeTiles.some(function(t) {
+                    return t && t.active && !t._hit && t._col === c && t.y > 0;
+                });
+
+                if (hasTileOnScreen) {
+                    rhythmUI.feedbackText.setText('✗  Wrong timing!').setColor('#ff4455');
+                    if (rhythmUI.hitLines) {
+                        rhythmUI.hitLines.forEach(function(l) { l.setFillStyle(0xff4455); });
+                    }
+                    missActive = true;
+                    missTimer  = 900;
+                }
+            }
+        }
+
+        // ── AUTO-MISS: tile sailed past hit window ────────────
+        activeTiles.forEach(function(t) {
+            if (!t || !t.active || t._hit) return;
+            if (t.y > hitY + HIT_WINDOW_PX + 10 && !missActive) {
+                rhythmUI.feedbackText.setText('✗  Miss!').setColor('#ff4455');
+                if (rhythmUI.hitLines) {
+                    rhythmUI.hitLines.forEach(function(l) { l.setFillStyle(0xff4455); });
+                }
+                missActive = true;
+                missTimer  = 900;
+            }
+        });
+
+        // Clean up destroyed tile references every frame
+        activeTiles = activeTiles.filter(function(t) { return t && t.active; });
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // CUTSCENE
+    // ════════════════════════════════════════════════════════════
+
+    if (currentStoryStep === 'MAN_CUTSCENE' && !dialogueBox.visible) {
+
+        man.setVisible(true);
+
+        const centerX = width * 0.5;
+        const centerY = height * 0.5;
+
+        const manReachedGirl =
+            Math.abs(man.x - player.x) < 60 &&
+            Math.abs(man.y - player.y) < 60;
+
+        if (!manReachedGirl) {
+
+            const dx   = player.x - man.x;
+            const dy   = player.y - man.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+
+            man.body.setVelocityX(dx / dist * 180);
+            man.body.setVelocityY(dy / dist * 180);
+            man.flipX = dx < 0;
+            man.anims.play('man_walk', true);
+            player.body.setVelocity(0);
+
+        } else {
+
+            const atCenter =
+                Math.abs(player.x - centerX) < 20 &&
+                Math.abs(player.y - centerY) < 20;
+
+            if (!atCenter) {
+
+                const dx   = centerX - player.x;
+                const dy   = centerY - player.y;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const vx   = dx / dist * 120;
+                const vy   = dy / dist * 120;
+
+                player.body.setVelocity(vx, vy);
+                player.anims.play('walk', true);
+                player.flipX = vx < 0;
+
+                man.body.setVelocity(vx, vy);
+                man.anims.play('man_walk', true);
+                man.flipX = vx < 0;
+                man.body.x = player.body.x + 55;
+                man.body.y = player.body.y;
+
+            } else {
+
+                player.body.setVelocity(0);
+                man.body.setVelocity(0);
+                man.body.x = player.body.x + 55;
+                man.body.y = player.body.y;
+                man.anims.stop();
+
+cake.setVisible(true);
+
+cake.setPosition(centerX, centerY - 110);
+
+// Bigger cozy cake
+cake.setScale(3.2);
+
+// Soft floating animation
+this.tweens.add({
+    targets: cake,
+    y: centerY - 120,
+    duration: 1800,
+    yoyo: true,
+    repeat: -1,
+    ease: 'Sine.easeInOut'
+});
+
+// Warm glow behind cake
+if (!cake.glow) {
+
+    cake.glow = this.add.circle(
+        centerX,
+        centerY - 110,
+        90,
+        0xffd27a,
+        0.28
+    );
+
+    cake.glow.setDepth(4.8);
+    cake.glow.setBlendMode(Phaser.BlendModes.ADD);
+
+    this.tweens.add({
+        targets: cake.glow,
+        alpha: 0.5,
+        scale: 1.15,
+        duration: 1400,
+        yoyo: true,
+        repeat: -1
+    });
+}
+
+// Cozy candle light flicker
+if (!cake.candleLight) {
+
+    cake.candleLight = this.add.circle(
+        centerX,
+        centerY - 165,
+        18,
+        0xffb347,
+        0.9
+    );
+
+    cake.candleLight.setDepth(6);
+    cake.candleLight.setBlendMode(Phaser.BlendModes.ADD);
+
+    this.tweens.add({
+        targets: cake.candleLight,
+        alpha: 0.4,
+        scale: 1.4,
+        duration: 220,
+        yoyo: true,
+        repeat: -1
+    });
+}
+
+                currentStoryStep = 'END';
+
+                showDialogue(
+                    "SURPRISE!!! AHHAHAHAHAHAHAHA 🎂\nHappy Birthday Niña!!\n\n"
+                );
+            }
+        }
+    }
+
+    // ════════════════════════════════════════════════════════════
+    // END — man spins, player freely controllable
+    // ════════════════════════════════════════════════════════════
+
+       if (currentStoryStep === 'END') {
+
+        man.angle += 6;
+        man.body.setVelocity(0);
+        player.body.setVelocity(0);
+
+        let endMoving = false;
+
+        if (wasd.left.isDown) {
+            player.body.setVelocityX(-180);
+            player.anims.play('walk', true);
+            player.flipX = true;
+            endMoving = true;
+        } else if (wasd.right.isDown) {
+            player.body.setVelocityX(180);
+            player.anims.play('walk', true);
+            player.flipX = false;
+            endMoving = true;
+        }
+
+        if (wasd.up.isDown) {
+            player.body.setVelocityY(-180);
+            player.anims.play('walk', true);
+            endMoving = true;
+        } else if (wasd.down.isDown) {
+            player.body.setVelocityY(180);
+            player.anims.play('walk', true);
+            endMoving = true;
+        }
+
+        if (!endMoving) {
+            player.anims.play('idle', true);
+            player.angle += 6;
+        } else {
+            player.angle = 0;
+        }
+    }
+
+    // ── UPDATE NAME TAG POSITIONS ────────────────────────
+
+    if (playerNameText) {
+        playerNameText.setPosition(player.x, player.y - 70);
+    }
+
+    if (manNameText) {
+        manNameText.setPosition(man.x, man.y - 70);
+
+        // Hide until man appears
+        manNameText.setVisible(man.visible);
+    }
+
+}
+
+function showDialogue(text) {
+    dialogueText.setText(text);
+    dialogueBox.setVisible(true);
+    dialogueText.setVisible(true);
+}
+
+function hideDialogue() {
+    dialogueBox.setVisible(false);
+    dialogueText.setVisible(false);
+}
+
+</script>
+
+</body>
+</html>
